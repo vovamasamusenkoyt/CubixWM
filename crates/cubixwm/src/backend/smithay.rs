@@ -1,4 +1,5 @@
 use crate::utils::{Error, Result};
+use chrono::Local;
 use smithay::{
     backend::{
         renderer::{Color32F, Frame, Renderer, gles::GlesRenderer},
@@ -11,6 +12,7 @@ use smithay::{
     },
     utils::{Rectangle, Transform},
 };
+use std::time::{Duration, Instant};
 
 pub struct SmithayBackend {
     initialized: bool,
@@ -58,7 +60,7 @@ impl SmithayBackend {
 
     pub fn run_nested(&mut self) -> Result<()> {
         let attributes = Window::default_attributes()
-            .with_title("CubixWM")
+            .with_title(&window_title())
             .with_inner_size(smithay::reexports::winit::dpi::LogicalSize::new(
                 1280.0, 800.0,
             ));
@@ -69,6 +71,7 @@ impl SmithayBackend {
                     "failed to initialize smithay winit backend: {error}"
                 ))
             })?;
+        let mut last_title_update = Instant::now();
 
         loop {
             let status = event_loop.dispatch_new_events(|event| match event {
@@ -80,6 +83,11 @@ impl SmithayBackend {
             match status {
                 PumpStatus::Continue => {}
                 PumpStatus::Exit(_) => break,
+            }
+
+            if last_title_update.elapsed() >= Duration::from_secs(1) {
+                backend.window().set_title(&window_title());
+                last_title_update = Instant::now();
             }
 
             let size = backend.window_size();
@@ -115,4 +123,8 @@ impl Default for SmithayBackend {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn window_title() -> String {
+    format!("CubixWM | {}", Local::now().format("%H:%M:%S"))
 }
