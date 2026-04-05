@@ -1,0 +1,6 @@
+/target
+/.qemu
+*.qcow2
+*.img
+*.iso
+
