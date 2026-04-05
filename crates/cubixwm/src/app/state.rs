@@ -42,9 +42,11 @@ impl Application {
             "cubixwm booted with backend={} renderer={}",
             boot.backend_name, boot.renderer_name
         );
+        println!("smithay status={}", self.backend.smithay_summary());
         println!("wm ready; workspaces={}", self.wm.workspace_count());
+        println!("opening nested Smithay window; close it to exit");
 
-        Ok(())
+        self.backend.run_nested()
     }
 
     pub fn demo(&mut self) {

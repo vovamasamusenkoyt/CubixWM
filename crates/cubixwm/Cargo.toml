@@ -13,4 +13,4 @@ name = "cubixwm"
 path = "src/main.rs"
 
 [dependencies]
-
+smithay = { version = "0.7", default-features = false, features = ["backend_winit", "renderer_glow", "wayland_frontend", "desktop", "xwayland"] }
