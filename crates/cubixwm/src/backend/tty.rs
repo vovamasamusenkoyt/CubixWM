@@ -229,12 +229,12 @@ impl TtyBackend {
 
         let mut display: Display<TtyCompositor> = Display::new()
             .map_err(|error| Error::new(format!("failed to create display: {error}")))?;
-        let dh = display.handle();
+        let mut dh = display.handle();
 
         let compositor_state = CompositorState::new::<TtyCompositor>(&dh);
         let shm_state = ShmState::new::<TtyCompositor>(&dh, vec![]);
         let mut seat_state = SeatState::new();
-        let seat = seat_state.new_wl_seat(&dh, "cubixwm-tty");
+        let mut seat = seat_state.new_wl_seat(&dh, "cubixwm-tty");
         let _keyboard = seat
             .add_keyboard(Default::default(), 200, 200)
             .map_err(|error| Error::new(format!("failed to initialize keyboard seat: {error}")))?;
