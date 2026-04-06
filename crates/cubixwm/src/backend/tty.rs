@@ -222,6 +222,10 @@ impl TtyBackend {
         })?;
 
         let _restore = RestoreCrtc::capture(&card, &output);
+        let _restore_cursor = RestoreCursor {
+            card: &card,
+            crtc: output.crtc.handle(),
+        };
         let mut buffer = card
             .create_dumb_buffer(
                 (output.mode.size().0.into(), output.mode.size().1.into()),
@@ -319,6 +323,18 @@ impl TtyBackend {
         let mut clients = Vec::new();
         let mut cursor_x = 24.0f64;
         let mut cursor_y = 24.0f64;
+        let mut hardware_cursor = create_hardware_cursor(&card, output.crtc.handle())
+            .map_err(|error| Error::new(format!("failed to create hardware cursor: {error}")))?;
+        let mut use_hardware_cursor = hardware_cursor.is_some();
+
+        eprintln!(
+            "cursor mode: {}",
+            if use_hardware_cursor {
+                "hardware"
+            } else {
+                "software"
+            }
+        );
 
         loop {
             if let Some(stream) = listener
@@ -361,6 +377,23 @@ impl TtyBackend {
 
             cursor_x = cursor_x.clamp(0.0, (output.mode.size().0.saturating_sub(1)) as f64);
             cursor_y = cursor_y.clamp(0.0, (output.mode.size().1.saturating_sub(1)) as f64);
+
+            if hardware_cursor.is_some() {
+                #[allow(deprecated)]
+                if let Err(error) = card.move_cursor(
+                    output.crtc.handle(),
+                    (cursor_x.round() as i32, cursor_y.round() as i32),
+                ) {
+                    eprintln!("hardware cursor move failed: {error}; falling back to software");
+                    #[allow(deprecated)]
+                    let _ = card.set_cursor(
+                        output.crtc.handle(),
+                        Option::<&drm::control::dumbbuffer::DumbBuffer>::None,
+                    );
+                    hardware_cursor = None;
+                    use_hardware_cursor = false;
+                }
+            }
 
             let pitch = buffer.pitch() as usize;
             let mut mapping = card
@@ -423,14 +456,16 @@ impl TtyBackend {
                     .map_err(|error| Error::new(format!("failed to wait for pixman frame: {error}")))?;
             }
 
-            draw_software_cursor(
-                mapping.as_mut(),
-                output.mode.size().0 as usize,
-                output.mode.size().1 as usize,
-                pitch,
-                cursor_x as usize,
-                cursor_y as usize,
-            );
+            if !use_hardware_cursor {
+                draw_software_cursor(
+                    mapping.as_mut(),
+                    output.mode.size().0 as usize,
+                    output.mode.size().1 as usize,
+                    pitch,
+                    cursor_x as usize,
+                    cursor_y as usize,
+                );
+            }
 
             for surface in state.xdg_shell_state.toplevel_surfaces() {
                 send_frames_surface_tree(
@@ -542,6 +577,11 @@ struct RestoreCrtc<'a> {
     mode: Option<drm::control::Mode>,
 }
 
+struct RestoreCursor<'a> {
+    card: &'a Card,
+    crtc: crtc::Handle,
+}
+
 impl<'a> RestoreCrtc<'a> {
     fn capture(card: &'a Card, output: &OutputSelection) -> Self {
         Self {
@@ -564,6 +604,15 @@ impl Drop for RestoreCrtc<'_> {
             &self.connectors,
             self.mode,
         );
+    }
+}
+
+impl Drop for RestoreCursor<'_> {
+    fn drop(&mut self) {
+        #[allow(deprecated)]
+        let _ = self
+            .card
+            .set_cursor(self.crtc, Option::<&drm::control::dumbbuffer::DumbBuffer>::None);
     }
 }
 
@@ -724,6 +773,92 @@ fn draw_software_cursor(
                 bytes[offset + 2] = 0xFF;
             }
             bytes[offset + 3] = 0x00;
+        }
+    }
+}
+
+fn create_hardware_cursor(
+    card: &Card,
+    crtc: crtc::Handle,
+) -> std::result::Result<Option<drm::control::dumbbuffer::DumbBuffer>, String> {
+    let mut buffer = match card.create_dumb_buffer((64, 64), DrmFourcc::Argb8888, 32) {
+        Ok(buffer) => buffer,
+        Err(error) => return Err(format!("create_dumb_buffer failed: {error}")),
+    };
+
+    let pitch = buffer.pitch() as usize;
+    let mut mapping = card
+        .map_dumb_buffer(&mut buffer)
+        .map_err(|error| format!("map_dumb_buffer failed: {error}"))?;
+
+    fill_hardware_cursor(mapping.as_mut(), pitch);
+
+    #[allow(deprecated)]
+    match card.set_cursor2(crtc, Some(&buffer), (0, 0)) {
+        Ok(()) => Ok(Some(buffer)),
+        Err(error) => {
+            eprintln!("hardware cursor unavailable: {error}");
+            Ok(None)
+        }
+    }
+}
+
+fn fill_hardware_cursor(bytes: &mut [u8], pitch: usize) {
+    const CURSOR_ROWS: &[u16] = &[
+        0b100000000000,
+        0b110000000000,
+        0b111000000000,
+        0b111100000000,
+        0b111110000000,
+        0b111111000000,
+        0b111111100000,
+        0b111111110000,
+        0b111111111000,
+        0b111111111100,
+        0b111111111110,
+        0b111111111111,
+        0b111111000000,
+        0b111001100000,
+        0b110000110000,
+        0b100000011000,
+    ];
+
+    for pixel in bytes.chunks_exact_mut(4) {
+        pixel[0] = 0x00;
+        pixel[1] = 0x00;
+        pixel[2] = 0x00;
+        pixel[3] = 0x00;
+    }
+
+    for (row_index, row_bits) in CURSOR_ROWS.iter().enumerate() {
+        for col in 0..12 {
+            if (row_bits & (1 << (11 - col))) == 0 {
+                continue;
+            }
+
+            let offset = row_index * pitch + col * 4;
+            if offset + 3 >= bytes.len() {
+                continue;
+            }
+
+            let border = row_index == 0
+                || row_index == CURSOR_ROWS.len() - 1
+                || col == 0
+                || col == 11
+                || (col > 0 && (row_bits & (1 << (12 - col))) == 0)
+                || (col < 11 && (row_bits & (1 << (10 - col))) == 0);
+
+            if border {
+                bytes[offset] = 0x00;
+                bytes[offset + 1] = 0x00;
+                bytes[offset + 2] = 0x00;
+                bytes[offset + 3] = 0xFF;
+            } else {
+                bytes[offset] = 0xFF;
+                bytes[offset + 1] = 0xFF;
+                bytes[offset + 2] = 0xFF;
+                bytes[offset + 3] = 0xFF;
+            }
         }
     }
 }
