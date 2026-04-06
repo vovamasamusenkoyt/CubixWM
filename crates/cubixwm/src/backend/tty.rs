@@ -86,12 +86,6 @@ impl TtyBackend {
             phase = phase.wrapping_add(3);
             thread::sleep(Duration::from_millis(150));
         }
-
-        #[allow(unreachable_code)]
-        {
-            drop(restore);
-            Ok(())
-        }
     }
 }
 
