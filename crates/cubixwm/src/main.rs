@@ -19,6 +19,7 @@ fn try_main() -> Result<(), Error> {
 
     match command.as_str() {
         "run" => app.run(),
+        "tty" => app.run_tty(),
         "demo" => {
             app.demo();
             Ok(())
@@ -36,6 +37,7 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  run   Start the application loop");
+    println!("  tty   Start the tty/drm backend (build with --features tty-backend)");
     println!("  demo  Exercise the WM core with mock windows");
     println!("  help  Show this help");
 }

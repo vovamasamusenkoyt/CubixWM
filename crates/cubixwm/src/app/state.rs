@@ -49,6 +49,22 @@ impl Application {
         self.backend.run_nested()
     }
 
+    pub fn run_tty(&mut self) -> Result<()> {
+        let boot = startup::boot(
+            &mut self.backend,
+            &mut self.renderer,
+            &mut self.protocols,
+            &mut self.input,
+            &mut self.x11,
+        );
+
+        println!(
+            "cubixwm tty boot with backend={} renderer={}",
+            boot.backend_name, boot.renderer_name
+        );
+        self.backend.run_tty()
+    }
+
     pub fn demo(&mut self) {
         let terminal = self.wm.create_window(
             "Terminal",
