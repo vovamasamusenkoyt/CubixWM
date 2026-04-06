@@ -10,6 +10,7 @@ default = []
 tty-backend = [
     "dep:drm",
     "dep:rustix",
+    "smithay/backend_libinput",
     "smithay/backend_session_libseat",
     "smithay/backend_udev",
     "smithay/renderer_pixman",

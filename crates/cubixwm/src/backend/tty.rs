@@ -6,6 +6,8 @@ use drm::{
 };
 use smithay::{
     backend::{
+        input::{AbsolutePositionEvent, PointerMotionEvent},
+        libinput::LibinputSessionInterface,
         renderer::{
             Bind, Color32F, Frame, Renderer,
             element::{
@@ -23,6 +25,7 @@ use smithay::{
     input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
+        input::{self, Libinput},
         pixman::{FormatCode, Image},
         wayland_server::{
             Client, Display, ListeningSocket,
@@ -188,6 +191,10 @@ impl TtyBackend {
         let (mut session, _notifier) = LibSeatSession::new()
             .map_err(|error| Error::new(format!("failed to open libseat session: {error}")))?;
         let seat = session.seat();
+        let mut libinput_context = Libinput::new_with_udev(LibinputSessionInterface::from(session.clone()));
+        libinput_context
+            .udev_assign_seat(&seat)
+            .map_err(|_| Error::new(format!("failed to assign libinput seat {seat}")))?;
         let gpu_path = primary_gpu(&seat)
             .map_err(|error| {
                 Error::new(format!("failed to query primary gpu for {seat}: {error}"))
@@ -310,6 +317,8 @@ impl TtyBackend {
         )));
         let start_time = Instant::now();
         let mut clients = Vec::new();
+        let mut cursor_x = 24.0f64;
+        let mut cursor_y = 24.0f64;
 
         loop {
             if let Some(stream) = listener
@@ -329,6 +338,29 @@ impl TtyBackend {
             display
                 .flush_clients()
                 .map_err(|error| Error::new(format!("failed to flush clients: {error}")))?;
+
+            libinput_context
+                .dispatch()
+                .map_err(|error| Error::new(format!("failed to dispatch libinput: {error}")))?;
+            for event in &mut libinput_context {
+                match event {
+                    input::Event::Pointer(pointer_event) => match pointer_event {
+                        input::event::PointerEvent::Motion(motion) => {
+                            cursor_x += motion.delta_x();
+                            cursor_y += motion.delta_y();
+                        }
+                        input::event::PointerEvent::MotionAbsolute(motion) => {
+                            cursor_x = motion.x_transformed(output.mode.size().0 as i32);
+                            cursor_y = motion.y_transformed(output.mode.size().1 as i32);
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+
+            cursor_x = cursor_x.clamp(0.0, (output.mode.size().0.saturating_sub(1)) as f64);
+            cursor_y = cursor_y.clamp(0.0, (output.mode.size().1.saturating_sub(1)) as f64);
 
             let pitch = buffer.pitch() as usize;
             let mut mapping = card
@@ -396,8 +428,8 @@ impl TtyBackend {
                 output.mode.size().0 as usize,
                 output.mode.size().1 as usize,
                 pitch,
-                24,
-                24,
+                cursor_x as usize,
+                cursor_y as usize,
             );
 
             for surface in state.xdg_shell_state.toplevel_surfaces() {
