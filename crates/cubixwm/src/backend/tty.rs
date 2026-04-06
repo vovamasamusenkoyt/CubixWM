@@ -590,6 +590,8 @@ impl TtyBackend {
                 );
             }
 
+            drop(mapping);
+
             for surface in state.xdg_shell_state.toplevel_surfaces() {
                 send_frames_surface_tree(
                     surface.wl_surface(),
