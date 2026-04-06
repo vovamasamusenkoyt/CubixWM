@@ -86,6 +86,7 @@ impl XdgShellHandler for TtyCompositor {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        eprintln!("new xdg_toplevel: {:?}", surface.wl_surface());
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Activated);
             state.size = Some((960, 640).into());
@@ -264,10 +265,10 @@ impl TtyBackend {
             output.mode.size().1
         );
         eprintln!("wayland display: {socket_name}");
-        eprintln!("spawning foot test client");
+        eprintln!("spawning demo client");
         eprintln!("press Ctrl+C to exit");
 
-        spawn_demo_client(&socket_name);
+        spawn_demo_client(&socket_name)?;
 
         let mut renderer = PixmanRenderer::new().map_err(|error| {
             Error::new(format!("failed to initialize pixman renderer: {error}"))
@@ -284,6 +285,7 @@ impl TtyBackend {
                 .accept()
                 .map_err(|error| Error::new(format!("failed to accept client: {error}")))?
             {
+                eprintln!("accepted wayland client");
                 let client = dh
                     .insert_client(stream, Arc::new(ClientState::default()))
                     .map_err(|error| Error::new(format!("failed to insert client: {error}")))?;
@@ -493,24 +495,55 @@ impl Drop for RestoreCrtc<'_> {
     }
 }
 
-fn spawn_demo_client(socket_name: &str) {
+fn spawn_demo_client(socket_name: &str) -> Result<()> {
+    if try_spawn_client("weston-simple-shm", socket_name, &[])? {
+        eprintln!("demo client: weston-simple-shm");
+        return Ok(());
+    }
+
     let script = "while true; do clear; date; sleep 1; done";
-    let _ = Command::new("foot")
+    if try_spawn_client(
+        "foot",
+        socket_name,
+        &["-T", "CubixWM Clock", "-e", "sh", "-lc", script],
+    )? {
+        eprintln!("demo client: foot");
+        return Ok(());
+    }
+
+    Err(Error::new(
+        "failed to spawn demo client: neither weston-simple-shm nor foot is available",
+    ))
+}
+
+fn try_spawn_client(binary: &str, socket_name: &str, args: &[&str]) -> Result<bool> {
+    let log_path = std::env::temp_dir().join(format!("cubixwm-{}.log", binary));
+    let stdout = File::create(&log_path)
+        .map_err(|error| Error::new(format!("failed to create {}: {error}", log_path.display())))?;
+    let stderr = stdout
+        .try_clone()
+        .map_err(|error| Error::new(format!("failed to clone {}: {error}", log_path.display())))?;
+
+    let mut command = Command::new(binary);
+    command
         .env("WAYLAND_DISPLAY", socket_name)
         .env(
             "XDG_RUNTIME_DIR",
             std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{}", nix_uid())),
         )
-        .arg("-T")
-        .arg("CubixWM Clock")
-        .arg("-e")
-        .arg("sh")
-        .arg("-lc")
-        .arg(script)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .args(args);
+
+    match command.spawn() {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(Error::new(format!(
+            "failed to spawn {binary} (see {}): {error}",
+            log_path.display()
+        ))),
+    }
 }
 
 fn send_frames_surface_tree(surface: &wl_surface::WlSurface, time: u32) {
