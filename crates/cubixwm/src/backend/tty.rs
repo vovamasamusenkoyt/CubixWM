@@ -1,6 +1,6 @@
 use crate::utils::{Error, Result};
 use drm::{
-    buffer::DrmFourcc,
+    buffer::{Buffer, DrmFourcc},
     control::{connector, crtc, Device as ControlDevice},
     Device as BasicDevice,
 };
