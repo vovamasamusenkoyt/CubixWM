@@ -2,7 +2,7 @@ use crate::utils::{Error, Result};
 use drm::{
     Device as BasicDevice,
     buffer::{Buffer, DrmFourcc},
-    control::{Device as ControlDevice, connector, crtc, framebuffer},
+    control::{ClipRect, Device as ControlDevice, connector, crtc, framebuffer},
 };
 use smithay::{
     backend::{
@@ -350,9 +350,12 @@ impl TtyBackend {
                 draw_render_elements(&mut frame, 1.0, &elements, &[damage])
                     .map_err(|error| Error::new(format!("failed to draw surface tree: {error}")))?;
 
-                frame.finish().map_err(|error| {
+                let sync = frame.finish().map_err(|error| {
                     Error::new(format!("failed to finish pixman frame: {error}"))
                 })?;
+                renderer
+                    .wait(&sync)
+                    .map_err(|error| Error::new(format!("failed to wait for pixman frame: {error}")))?;
             }
 
             for surface in state.xdg_shell_state.toplevel_surfaces() {
@@ -362,7 +365,15 @@ impl TtyBackend {
                 );
             }
 
-            let _ = card.dirty_framebuffer(framebuffer, &[]);
+            let _ = card.dirty_framebuffer(
+                framebuffer,
+                &[ClipRect::new(
+                    0,
+                    0,
+                    output.mode.size().0,
+                    output.mode.size().1,
+                )],
+            );
             thread::sleep(Duration::from_millis(16));
         }
     }
