@@ -49,7 +49,7 @@ impl TtyBackend {
         );
         eprintln!("press Ctrl+C to exit");
 
-        let restore = RestoreCrtc::capture(&card, &output);
+        let _restore = RestoreCrtc::capture(&card, &output);
         let mut buffer = card
             .create_dumb_buffer(
                 (output.mode.size().0.into(), output.mode.size().1.into()),
@@ -72,6 +72,7 @@ impl TtyBackend {
 
         let mut phase: u8 = 0;
         loop {
+            let pitch = buffer.pitch() as usize;
             let mut mapping = card
                 .map_dumb_buffer(&mut buffer)
                 .map_err(|error| Error::new(format!("failed to map dumb buffer: {error}")))?;
@@ -79,7 +80,7 @@ impl TtyBackend {
                 mapping.as_mut(),
                 output.mode.size().0 as usize,
                 output.mode.size().1 as usize,
-                buffer.pitch() as usize,
+                pitch,
                 phase,
             );
             phase = phase.wrapping_add(3);
