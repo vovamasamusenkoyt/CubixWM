@@ -1,7 +1,7 @@
 use crate::utils::{Error, Result};
 use drm::{
     buffer::{Buffer, DrmFourcc},
-    control::{connector, crtc, Device as ControlDevice},
+    control::{connector, crtc, framebuffer, ClipRect, Device as ControlDevice},
     Device as BasicDevice,
 };
 use smithay::backend::{
@@ -83,6 +83,15 @@ impl TtyBackend {
                 pitch,
                 phase,
             );
+            let _ = card.dirty_framebuffer(
+                framebuffer,
+                &[ClipRect::new(
+                    0,
+                    0,
+                    output.mode.size().0,
+                    output.mode.size().1,
+                )],
+            );
             phase = phase.wrapping_add(3);
             thread::sleep(Duration::from_millis(150));
         }
@@ -97,15 +106,12 @@ impl Default for TtyBackend {
 
 struct Card {
     file: File,
-    path: PathBuf,
 }
 
 impl Card {
     fn new(fd: OwnedFd, path: PathBuf) -> Self {
-        Self {
-            file: File::from(fd),
-            path,
-        }
+        let _ = path;
+        Self { file: File::from(fd) }
     }
 }
 
@@ -209,9 +215,9 @@ fn fill_gradient(bytes: &mut [u8], width: usize, height: usize, pitch: usize, ph
         let row = &mut bytes[y * pitch..(y * pitch) + (width * 4)];
         for x in 0..width {
             let offset = x * 4;
-            row[offset] = (x as u8).wrapping_add(phase);
-            row[offset + 1] = (y as u8).wrapping_add(phase.wrapping_mul(2));
-            row[offset + 2] = phase.wrapping_mul(3);
+            row[offset] = phase;
+            row[offset + 1] = phase.wrapping_mul(2);
+            row[offset + 2] = 0xffu8.wrapping_sub(phase);
             row[offset + 3] = 0;
         }
     }
