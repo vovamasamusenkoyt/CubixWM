@@ -7,7 +7,13 @@ authors.workspace = true
 
 [features]
 default = []
-tty-backend = ["dep:drm", "dep:rustix", "smithay/backend_session_libseat", "smithay/backend_udev"]
+tty-backend = [
+    "dep:drm",
+    "dep:rustix",
+    "smithay/backend_session_libseat",
+    "smithay/backend_udev",
+    "smithay/renderer_pixman",
+]
 
 [lib]
 path = "src/lib.rs"

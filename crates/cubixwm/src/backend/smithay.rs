@@ -4,43 +4,42 @@ use smithay::{
     backend::{
         input::{InputEvent, KeyboardKeyEvent},
         renderer::{
+            Color32F, Frame, Renderer,
             element::{
-                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
                 Kind,
+                surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
             },
             gles::GlesRenderer,
             utils::{draw_render_elements, on_commit_buffer_handler},
-            Color32F, Frame, Renderer,
         },
         winit::{self, WinitEvent},
     },
     delegate_compositor, delegate_data_device, delegate_seat, delegate_shm, delegate_xdg_shell,
-    input::{
-        keyboard::FilterResult,
-        pointer::CursorImageStatus,
-        Seat, SeatHandler, SeatState,
-    },
+    input::{Seat, SeatHandler, SeatState, keyboard::FilterResult, pointer::CursorImageStatus},
     reexports::wayland_server::{
+        Client, Display, ListeningSocket,
         backend::{ClientData, ClientId, DisconnectReason},
         protocol::{
-            wl_buffer,
-            wl_seat,
+            wl_buffer, wl_seat,
             wl_surface::{self, WlSurface},
         },
-        Client, Display, ListeningSocket,
     },
     utils::{Rectangle, Serial, Transform},
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            with_surface_tree_downward, CompositorClientState, CompositorHandler, CompositorState,
-            SurfaceAttributes, TraversalAction,
+            CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes,
+            TraversalAction, with_surface_tree_downward,
         },
         selection::{
-            data_device::{ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler},
             SelectionHandler,
+            data_device::{
+                ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+            },
         },
-        shell::xdg::{PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState},
+        shell::xdg::{
+            PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+        },
         shm::{ShmHandler, ShmState},
     },
 };
@@ -264,10 +263,18 @@ impl SmithayBackend {
                         );
                     }
                     InputEvent::PointerMotionAbsolute { .. } => {
-                        if let Some(surface) =
-                            state.xdg_shell_state.toplevel_surfaces().iter().next().cloned()
+                        if let Some(surface) = state
+                            .xdg_shell_state
+                            .toplevel_surfaces()
+                            .iter()
+                            .next()
+                            .cloned()
                         {
-                            keyboard.set_focus(&mut state, Some(surface.wl_surface().clone()), 0.into());
+                            keyboard.set_focus(
+                                &mut state,
+                                Some(surface.wl_surface().clone()),
+                                0.into(),
+                            );
                         }
                     }
                     _ => {}
