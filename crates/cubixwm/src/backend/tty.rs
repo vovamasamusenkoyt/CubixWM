@@ -496,11 +496,6 @@ impl Drop for RestoreCrtc<'_> {
 }
 
 fn spawn_demo_client(socket_name: &str) -> Result<()> {
-    if try_spawn_client("weston-simple-shm", socket_name, &[])? {
-        eprintln!("demo client: weston-simple-shm");
-        return Ok(());
-    }
-
     let script = "while true; do clear; date; sleep 1; done";
     if try_spawn_client(
         "foot",
@@ -508,6 +503,11 @@ fn spawn_demo_client(socket_name: &str) -> Result<()> {
         &["-T", "CubixWM Clock", "-e", "sh", "-lc", script],
     )? {
         eprintln!("demo client: foot");
+        return Ok(());
+    }
+
+    if try_spawn_client("weston-simple-shm", socket_name, &[])? {
+        eprintln!("demo client: weston-simple-shm");
         return Ok(());
     }
 
