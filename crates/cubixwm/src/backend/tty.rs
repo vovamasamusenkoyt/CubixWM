@@ -72,7 +72,7 @@ struct TtyCompositor {
     shm_state: ShmState,
     seat_state: SeatState<Self>,
     data_device_state: DataDeviceState,
-    output_manager_state: OutputManagerState,
+    _output_manager_state: OutputManagerState,
 }
 
 #[derive(Default)]
@@ -254,7 +254,7 @@ impl TtyBackend {
             shm_state,
             seat_state,
             data_device_state: DataDeviceState::new::<TtyCompositor>(&dh),
-            output_manager_state,
+            _output_manager_state: output_manager_state,
         };
 
         let wl_output = Output::new(
@@ -390,6 +390,15 @@ impl TtyBackend {
                     .wait(&sync)
                     .map_err(|error| Error::new(format!("failed to wait for pixman frame: {error}")))?;
             }
+
+            draw_software_cursor(
+                mapping.as_mut(),
+                output.mode.size().0 as usize,
+                output.mode.size().1 as usize,
+                pitch,
+                24,
+                24,
+            );
 
             for surface in state.xdg_shell_state.toplevel_surfaces() {
                 send_frames_surface_tree(
@@ -616,4 +625,73 @@ fn nix_uid() -> u32 {
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .and_then(|value| value.trim().parse::<u32>().ok())
         .unwrap_or(1000)
+}
+
+fn draw_software_cursor(
+    bytes: &mut [u8],
+    width: usize,
+    height: usize,
+    pitch: usize,
+    origin_x: usize,
+    origin_y: usize,
+) {
+    const CURSOR_ROWS: &[u16] = &[
+        0b100000000000,
+        0b110000000000,
+        0b111000000000,
+        0b111100000000,
+        0b111110000000,
+        0b111111000000,
+        0b111111100000,
+        0b111111110000,
+        0b111111111000,
+        0b111111111100,
+        0b111111111110,
+        0b111111111111,
+        0b111111000000,
+        0b111001100000,
+        0b110000110000,
+        0b100000011000,
+    ];
+
+    for (row_index, row_bits) in CURSOR_ROWS.iter().enumerate() {
+        let y = origin_y + row_index;
+        if y >= height {
+            break;
+        }
+
+        for col in 0..12 {
+            let x = origin_x + col;
+            if x >= width {
+                break;
+            }
+
+            if (row_bits & (1 << (11 - col))) == 0 {
+                continue;
+            }
+
+            let offset = y * pitch + x * 4;
+            if offset + 3 >= bytes.len() {
+                continue;
+            }
+
+            let border = row_index == 0
+                || row_index == CURSOR_ROWS.len() - 1
+                || col == 0
+                || col == 11
+                || (col > 0 && (row_bits & (1 << (12 - col))) == 0)
+                || (col < 11 && (row_bits & (1 << (10 - col))) == 0);
+
+            if border {
+                bytes[offset] = 0x00;
+                bytes[offset + 1] = 0x00;
+                bytes[offset + 2] = 0x00;
+            } else {
+                bytes[offset] = 0xFF;
+                bytes[offset + 1] = 0xFF;
+                bytes[offset + 2] = 0xFF;
+            }
+            bytes[offset + 3] = 0x00;
+        }
+    }
 }
