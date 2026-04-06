@@ -792,6 +792,7 @@ fn create_hardware_cursor(
         .map_err(|error| format!("map_dumb_buffer failed: {error}"))?;
 
     fill_hardware_cursor(mapping.as_mut(), pitch);
+    drop(mapping);
 
     #[allow(deprecated)]
     match card.set_cursor2(crtc, Some(&buffer), (0, 0)) {
