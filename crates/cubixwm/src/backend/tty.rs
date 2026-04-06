@@ -386,7 +386,7 @@ impl TtyBackend {
                 match event {
                     input::Event::Keyboard(input::event::KeyboardEvent::Key(key)) => {
                         let serial = SERIAL_COUNTER.next_serial();
-                        let time = key.time();
+                        let time = key.time() as u32;
 
                         keyboard.input::<(), _>(
                             &mut state,
@@ -401,7 +401,10 @@ impl TtyBackend {
                                 let keysym = handle.modified_sym();
                                 let pressed = matches!(key.state(), BackendKeyState::Pressed);
 
-                                if pressed && modifiers.logo && keysym == keysyms::KEY_Return {
+                                if pressed
+                                    && modifiers.logo
+                                    && keysym == keysyms::KEY_Return.into()
+                                {
                                     if let Err(error) = spawn_client(
                                         "foot",
                                         &socket_name,
@@ -412,7 +415,7 @@ impl TtyBackend {
                                     return FilterResult::Intercept(());
                                 }
 
-                                if pressed && modifiers.logo && keysym == keysyms::KEY_q {
+                                if pressed && modifiers.logo && keysym == keysyms::KEY_q.into() {
                                     if let Some(surface) =
                                         state.xdg_shell_state.toplevel_surfaces().iter().next()
                                     {
@@ -421,7 +424,10 @@ impl TtyBackend {
                                     return FilterResult::Intercept(());
                                 }
 
-                                if pressed && modifiers.logo && keysym == keysyms::KEY_Escape {
+                                if pressed
+                                    && modifiers.logo
+                                    && keysym == keysyms::KEY_Escape.into()
+                                {
                                     running = false;
                                     return FilterResult::Intercept(());
                                 }
