@@ -75,6 +75,10 @@ use wayland_protocols::xdg::shell::server::xdg_toplevel;
 
 pub struct TtyBackend;
 
+const WINDOW_BORDER: i32 = 2;
+const TITLEBAR_HEIGHT: i32 = 32;
+const RESIZE_HANDLE_SIZE: i32 = 20;
+
 struct TtyCompositor {
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
@@ -82,6 +86,21 @@ struct TtyCompositor {
     seat_state: SeatState<Self>,
     data_device_state: DataDeviceState,
     _output_manager_state: OutputManagerState,
+    window_location: Point<i32, Logical>,
+    window_size: Size<i32, Logical>,
+    drag: Option<WindowDrag>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WindowDrag {
+    Move {
+        pointer_start: Point<f64, Logical>,
+        window_start: Point<i32, Logical>,
+    },
+    Resize {
+        pointer_start: Point<f64, Logical>,
+        window_start: Size<i32, Logical>,
+    },
 }
 
 #[derive(Default)]
@@ -102,7 +121,7 @@ impl XdgShellHandler for TtyCompositor {
         eprintln!("new xdg_toplevel: {:?}", surface.wl_surface());
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Activated);
-            state.size = Some((960, 640).into());
+            state.size = Some(content_size(self.window_size).into());
         });
         surface.send_configure();
     }
@@ -273,6 +292,9 @@ impl TtyBackend {
             seat_state,
             data_device_state: DataDeviceState::new::<TtyCompositor>(&dh),
             _output_manager_state: output_manager_state,
+            window_location: (48, 48).into(),
+            window_size: (964, 674).into(),
+            drag: None,
         };
 
         let wl_output = Output::new(
@@ -380,35 +402,57 @@ impl TtyBackend {
                             let serial = SERIAL_COUNTER.next_serial();
                             let time = button.time_msec();
                             let focus = pointer_focus(&state, cursor_x, cursor_y);
+                            let point = Point::<f64, Logical>::from((cursor_x, cursor_y));
 
                             if button.button_code() == 0x110
                                 && button.state() == BackendButtonState::Pressed
                             {
-                                keyboard.set_focus(
-                                    &mut state,
-                                    focus.as_ref().map(|(surface, _)| surface.clone()),
-                                    serial,
-                                );
+                                if titlebar_hit(&state, point) {
+                                    state.drag = Some(WindowDrag::Move {
+                                        pointer_start: point,
+                                        window_start: state.window_location,
+                                    });
+                                } else {
+                                    keyboard.set_focus(
+                                        &mut state,
+                                        focus.as_ref().map(|(surface, _)| surface.clone()),
+                                        serial,
+                                    );
+                                }
+                            } else if button.button_code() == 0x111
+                                && button.state() == BackendButtonState::Pressed
+                                && resize_handle_hit(&state, point)
+                            {
+                                state.drag = Some(WindowDrag::Resize {
+                                    pointer_start: point,
+                                    window_start: state.window_size,
+                                });
+                            } else if matches!(button.state(), BackendButtonState::Released)
+                                && matches!(button.button_code(), 0x110 | 0x111)
+                            {
+                                state.drag = None;
                             }
 
-                            pointer.motion(
-                                &mut state,
-                                focus.clone(),
-                                &MotionEvent {
-                                    location: (cursor_x, cursor_y).into(),
-                                    serial,
-                                    time,
-                                },
-                            );
-                            pointer.button(
-                                &mut state,
-                                &ButtonEvent {
-                                    serial,
-                                    time,
-                                    button: button.button_code(),
-                                    state: button.state(),
-                                },
-                            );
+                            if state.drag.is_none() {
+                                pointer.motion(
+                                    &mut state,
+                                    focus.clone(),
+                                    &MotionEvent {
+                                        location: point,
+                                        serial,
+                                        time,
+                                    },
+                                );
+                                pointer.button(
+                                    &mut state,
+                                    &ButtonEvent {
+                                        serial,
+                                        time,
+                                        button: button.button_code(),
+                                        state: button.state(),
+                                    },
+                                );
+                            }
                         }
                         _ => {}
                     },
@@ -418,6 +462,36 @@ impl TtyBackend {
 
             cursor_x = cursor_x.clamp(0.0, (output.mode.size().0.saturating_sub(1)) as f64);
             cursor_y = cursor_y.clamp(0.0, (output.mode.size().1.saturating_sub(1)) as f64);
+
+            if let Some(drag) = state.drag {
+                match drag {
+                    WindowDrag::Move {
+                        pointer_start,
+                        window_start,
+                    } => {
+                        state.window_location = (
+                            (window_start.x as f64 + (cursor_x - pointer_start.x)).round() as i32,
+                            (window_start.y as f64 + (cursor_y - pointer_start.y)).round() as i32,
+                        )
+                            .into();
+                    }
+                    WindowDrag::Resize {
+                        pointer_start,
+                        window_start,
+                    } => {
+                        let new_size = (
+                            (window_start.w as f64 + (cursor_x - pointer_start.x)).round() as i32,
+                            (window_start.h as f64 + (cursor_y - pointer_start.y)).round() as i32,
+                        );
+                        state.window_size = (
+                            new_size.0.max(320),
+                            new_size.1.max(TITLEBAR_HEIGHT + 160),
+                        )
+                            .into();
+                        configure_first_toplevel(&state);
+                    }
+                }
+            }
 
             let focus = pointer_focus(&state, cursor_x, cursor_y);
             pointer.motion(
@@ -473,7 +547,10 @@ impl TtyBackend {
                     render_elements_from_surface_tree(
                         &mut renderer,
                         surface.wl_surface(),
-                        (48, 48),
+                        (
+                            state.window_location.x + WINDOW_BORDER,
+                            state.window_location.y + TITLEBAR_HEIGHT,
+                        ),
                         1.0,
                         1.0,
                         Kind::Unspecified,
@@ -507,6 +584,8 @@ impl TtyBackend {
                     .wait(&sync)
                     .map_err(|error| Error::new(format!("failed to wait for pixman frame: {error}")))?;
             }
+
+            draw_window_chrome(mapping.as_mut(), pitch, &state);
 
             if !use_hardware_cursor {
                 draw_software_cursor(
@@ -750,18 +829,29 @@ fn send_frames_surface_tree(surface: &wl_surface::WlSurface, time: u32) {
     );
 }
 
+fn configure_first_toplevel(state: &TtyCompositor) {
+    if let Some(surface) = state.xdg_shell_state.toplevel_surfaces().iter().next() {
+        surface.with_pending_state(|pending| {
+            pending.states.set(xdg_toplevel::State::Activated);
+            pending.size = Some(content_size(state.window_size).into());
+        });
+        surface.send_configure();
+    }
+}
+
 fn pointer_focus(
     state: &TtyCompositor,
     cursor_x: f64,
     cursor_y: f64,
 ) -> Option<(WlSurface, Point<f64, Logical>)> {
-    const WINDOW_X: f64 = 48.0;
-    const WINDOW_Y: f64 = 48.0;
-    const WINDOW_W: f64 = 960.0;
-    const WINDOW_H: f64 = 640.0;
+    let content_origin = (
+        state.window_location.x + WINDOW_BORDER,
+        state.window_location.y + TITLEBAR_HEIGHT,
+    );
+    let content_size = content_size(state.window_size);
 
-    if !(WINDOW_X..WINDOW_X + WINDOW_W).contains(&cursor_x)
-        || !(WINDOW_Y..WINDOW_Y + WINDOW_H).contains(&cursor_y)
+    if !(content_origin.0 as f64..(content_origin.0 + content_size.w) as f64).contains(&cursor_x)
+        || !(content_origin.1 as f64..(content_origin.1 + content_size.h) as f64).contains(&cursor_y)
     {
         return None;
     }
@@ -771,7 +861,29 @@ fn pointer_focus(
         .toplevel_surfaces()
         .iter()
         .next()
-        .map(|surface| (surface.wl_surface().clone(), (WINDOW_X, WINDOW_Y).into()))
+        .map(|surface| (surface.wl_surface().clone(), content_origin.into()))
+}
+
+fn titlebar_hit(state: &TtyCompositor, point: Point<f64, Logical>) -> bool {
+    point.x >= state.window_location.x as f64
+        && point.x < (state.window_location.x + state.window_size.w) as f64
+        && point.y >= state.window_location.y as f64
+        && point.y < (state.window_location.y + TITLEBAR_HEIGHT) as f64
+}
+
+fn resize_handle_hit(state: &TtyCompositor, point: Point<f64, Logical>) -> bool {
+    point.x >= (state.window_location.x + state.window_size.w - RESIZE_HANDLE_SIZE) as f64
+        && point.x < (state.window_location.x + state.window_size.w) as f64
+        && point.y >= (state.window_location.y + state.window_size.h - RESIZE_HANDLE_SIZE) as f64
+        && point.y < (state.window_location.y + state.window_size.h) as f64
+}
+
+fn content_size(window_size: Size<i32, Logical>) -> Size<i32, Logical> {
+    (
+        (window_size.w - WINDOW_BORDER * 2).max(64),
+        (window_size.h - TITLEBAR_HEIGHT - WINDOW_BORDER).max(64),
+    )
+        .into()
 }
 
 fn nix_uid() -> u32 {
@@ -849,6 +961,60 @@ fn draw_software_cursor(
                 bytes[offset + 2] = 0xFF;
             }
             bytes[offset + 3] = 0x00;
+        }
+    }
+}
+
+fn draw_window_chrome(bytes: &mut [u8], pitch: usize, state: &TtyCompositor) {
+    let x = state.window_location.x.max(0) as usize;
+    let y = state.window_location.y.max(0) as usize;
+    let w = state.window_size.w.max(0) as usize;
+    let h = state.window_size.h.max(0) as usize;
+
+    fill_rect(bytes, pitch, x, y, w, h, [0x1c, 0x1f, 0x24, 0x00]);
+    fill_rect(
+        bytes,
+        pitch,
+        x + WINDOW_BORDER as usize,
+        y + WINDOW_BORDER as usize,
+        w.saturating_sub((WINDOW_BORDER * 2) as usize),
+        (TITLEBAR_HEIGHT - WINDOW_BORDER) as usize,
+        [0x42, 0x8d, 0xf5, 0x00],
+    );
+
+    let handle = RESIZE_HANDLE_SIZE as usize;
+    fill_rect(
+        bytes,
+        pitch,
+        x + w.saturating_sub(handle),
+        y + h.saturating_sub(handle),
+        handle,
+        handle,
+        [0xa0, 0xa8, 0xb8, 0x00],
+    );
+}
+
+fn fill_rect(
+    bytes: &mut [u8],
+    pitch: usize,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    color: [u8; 4],
+) {
+    for row in 0..height {
+        let row_y = y + row;
+        let row_start = row_y.saturating_mul(pitch);
+        for col in 0..width {
+            let offset = row_start + (x + col) * 4;
+            if offset + 3 >= bytes.len() {
+                continue;
+            }
+            bytes[offset] = color[0];
+            bytes[offset + 1] = color[1];
+            bytes[offset + 2] = color[2];
+            bytes[offset + 3] = color[3];
         }
     }
 }
