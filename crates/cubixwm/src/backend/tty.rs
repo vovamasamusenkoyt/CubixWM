@@ -2,7 +2,7 @@ use crate::utils::{Error, Result};
 use drm::{
     Device as BasicDevice,
     buffer::{Buffer, DrmFourcc},
-    control::{ClipRect, Device as ControlDevice, connector, crtc, framebuffer},
+    control::{Device as ControlDevice, PageFlipFlags, connector, crtc, framebuffer},
 };
 use smithay::{
     backend::{
@@ -251,20 +251,12 @@ impl TtyBackend {
             card: &card,
             crtc: output.crtc.handle(),
         };
-        let mut buffer = card
-            .create_dumb_buffer(
-                (output.mode.size().0.into(), output.mode.size().1.into()),
-                DrmFourcc::Xrgb8888,
-                32,
-            )
-            .map_err(|error| Error::new(format!("failed to create dumb buffer: {error}")))?;
-        let framebuffer = card
-            .add_framebuffer(&buffer, 24, 32)
-            .map_err(|error| Error::new(format!("failed to create framebuffer: {error}")))?;
+        let mut front_buffer = create_scanout_buffer(&card, &output)?;
+        let mut back_buffer = create_scanout_buffer(&card, &output)?;
 
         card.set_crtc(
             output.crtc.handle(),
-            Some(framebuffer),
+            Some(front_buffer.framebuffer),
             (0, 0),
             &[output.connector.handle()],
             Some(output.mode),
@@ -521,9 +513,9 @@ impl TtyBackend {
                 }
             }
 
-            let pitch = buffer.pitch() as usize;
+            let pitch = back_buffer.dumb.pitch() as usize;
             let mut mapping = card
-                .map_dumb_buffer(&mut buffer)
+                .map_dumb_buffer(&mut back_buffer.dumb)
                 .map_err(|error| Error::new(format!("failed to map dumb buffer: {error}")))?;
             let format = FormatCode::try_from(DrmFourcc::Xrgb8888)
                 .map_err(|_| Error::new("pixman does not support Xrgb8888"))?;
@@ -605,15 +597,15 @@ impl TtyBackend {
                 );
             }
 
-            let _ = card.dirty_framebuffer(
-                framebuffer,
-                &[ClipRect::new(
-                    0,
-                    0,
-                    output.mode.size().0,
-                    output.mode.size().1,
-                )],
-            );
+            card.page_flip(
+                output.crtc.handle(),
+                back_buffer.framebuffer,
+                PageFlipFlags::empty(),
+                None,
+            )
+            .map_err(|error| Error::new(format!("failed to page flip: {error}")))?;
+
+            std::mem::swap(&mut front_buffer, &mut back_buffer);
             thread::sleep(Duration::from_millis(16));
         }
     }
@@ -627,6 +619,11 @@ impl Default for TtyBackend {
 
 struct Card {
     file: File,
+}
+
+struct ScanoutBuffer {
+    dumb: drm::control::dumbbuffer::DumbBuffer,
+    framebuffer: framebuffer::Handle,
 }
 
 impl Card {
@@ -646,6 +643,21 @@ impl AsFd for Card {
 
 impl BasicDevice for Card {}
 impl ControlDevice for Card {}
+
+fn create_scanout_buffer(card: &Card, output: &OutputSelection) -> Result<ScanoutBuffer> {
+    let dumb = card
+        .create_dumb_buffer(
+            (output.mode.size().0.into(), output.mode.size().1.into()),
+            DrmFourcc::Xrgb8888,
+            32,
+        )
+        .map_err(|error| Error::new(format!("failed to create dumb buffer: {error}")))?;
+    let framebuffer = card
+        .add_framebuffer(&dumb, 24, 32)
+        .map_err(|error| Error::new(format!("failed to create framebuffer: {error}")))?;
+
+    Ok(ScanoutBuffer { dumb, framebuffer })
+}
 
 struct OutputSelection {
     connector: connector::Info,
