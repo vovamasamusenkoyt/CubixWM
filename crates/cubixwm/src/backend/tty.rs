@@ -861,7 +861,12 @@ fn pointer_focus(
         .toplevel_surfaces()
         .iter()
         .next()
-        .map(|surface| (surface.wl_surface().clone(), content_origin.into()))
+        .map(|surface| {
+            (
+                surface.wl_surface().clone(),
+                (content_origin.0 as f64, content_origin.1 as f64).into(),
+            )
+        })
 }
 
 fn titlebar_hit(state: &TtyCompositor, point: Point<f64, Logical>) -> bool {
