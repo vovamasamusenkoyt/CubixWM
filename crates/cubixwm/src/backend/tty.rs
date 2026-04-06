@@ -419,9 +419,10 @@ impl TtyBackend {
             cursor_x = cursor_x.clamp(0.0, (output.mode.size().0.saturating_sub(1)) as f64);
             cursor_y = cursor_y.clamp(0.0, (output.mode.size().1.saturating_sub(1)) as f64);
 
+            let focus = pointer_focus(&state, cursor_x, cursor_y);
             pointer.motion(
                 &mut state,
-                pointer_focus(&state, cursor_x, cursor_y),
+                focus,
                 &MotionEvent {
                     location: (cursor_x, cursor_y).into(),
                     serial: SERIAL_COUNTER.next_serial(),
