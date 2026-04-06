@@ -19,7 +19,9 @@ use smithay::{
         udev::primary_gpu,
     },
     delegate_compositor, delegate_data_device, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_output,
     input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
+    output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         pixman::{FormatCode, Image},
         wayland_server::{
@@ -44,6 +46,7 @@ use smithay::{
                 ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
             },
         },
+        output::{OutputHandler, OutputManagerState},
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
         },
@@ -69,6 +72,7 @@ struct TtyCompositor {
     shm_state: ShmState,
     seat_state: SeatState<Self>,
     data_device_state: DataDeviceState,
+    output_manager_state: OutputManagerState,
 }
 
 #[derive(Default)]
@@ -166,11 +170,14 @@ impl ClientData for ClientState {
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
 }
 
+impl OutputHandler for TtyCompositor {}
+
 delegate_xdg_shell!(TtyCompositor);
 delegate_compositor!(TtyCompositor);
 delegate_shm!(TtyCompositor);
 delegate_seat!(TtyCompositor);
 delegate_data_device!(TtyCompositor);
+delegate_output!(TtyCompositor);
 
 impl TtyBackend {
     pub fn new() -> Self {
@@ -234,6 +241,7 @@ impl TtyBackend {
 
         let compositor_state = CompositorState::new::<TtyCompositor>(&dh);
         let shm_state = ShmState::new::<TtyCompositor>(&dh, vec![]);
+        let output_manager_state = OutputManagerState::new_with_xdg_output::<TtyCompositor>(&dh);
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "cubixwm-tty");
         let _keyboard = seat
@@ -246,7 +254,30 @@ impl TtyBackend {
             shm_state,
             seat_state,
             data_device_state: DataDeviceState::new::<TtyCompositor>(&dh),
+            output_manager_state,
         };
+
+        let wl_output = Output::new(
+            "CubixWM-TTY".into(),
+            PhysicalProperties {
+                size: ((output.mode.size().0 / 4) as i32, (output.mode.size().1 / 4) as i32).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Cubix".into(),
+                model: "Virtual DRM Output".into(),
+            },
+        );
+        let _output_global = wl_output.create_global::<TtyCompositor>(&dh);
+        let mode = Mode {
+            size: (output.mode.size().0 as i32, output.mode.size().1 as i32).into(),
+            refresh: 60_000,
+        };
+        wl_output.change_current_state(
+            Some(mode),
+            Some(Transform::Normal),
+            Some(Scale::Integer(1)),
+            Some((0, 0).into()),
+        );
+        wl_output.set_preferred(mode);
 
         let listener = ListeningSocket::bind_auto("cubixwm-", 32..128)
             .map_err(|error| Error::new(format!("failed to bind wayland socket: {error}")))?;
