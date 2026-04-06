@@ -8,7 +8,7 @@ use smithay::{
     backend::{
         input::{
             AbsolutePositionEvent, ButtonState as BackendButtonState, Event as BackendEvent,
-            PointerButtonEvent, PointerMotionEvent,
+            KeyState as BackendKeyState, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
         },
         libinput::LibinputSessionInterface,
         renderer::{
@@ -26,6 +26,7 @@ use smithay::{
     delegate_compositor, delegate_data_device, delegate_seat, delegate_shm, delegate_xdg_shell,
     delegate_output,
     input::{
+        keyboard::{FilterResult, keysyms},
         Seat, SeatHandler, SeatState,
         pointer::{ButtonEvent, CursorImageStatus, MotionEvent},
     },
@@ -356,8 +357,10 @@ impl TtyBackend {
                 "software"
             }
         );
+        eprintln!("shortcuts: Super+Enter launch foot, Super+Q close window, Super+Esc exit");
 
-        loop {
+        let mut running = true;
+        while running {
             if let Some(stream) = listener
                 .accept()
                 .map_err(|error| Error::new(format!("failed to accept client: {error}")))?
@@ -381,6 +384,52 @@ impl TtyBackend {
                 .map_err(|error| Error::new(format!("failed to dispatch libinput: {error}")))?;
             for event in &mut libinput_context {
                 match event {
+                    input::Event::Keyboard(input::event::KeyboardEvent::Key(key)) => {
+                        let serial = SERIAL_COUNTER.next_serial();
+                        let time = key.time();
+
+                        keyboard.input::<(), _>(
+                            &mut state,
+                            key.key_code(),
+                            match key.state() {
+                                BackendKeyState::Pressed => smithay::backend::input::KeyState::Pressed,
+                                BackendKeyState::Released => smithay::backend::input::KeyState::Released,
+                            },
+                            serial,
+                            time,
+                            |state, modifiers, handle| {
+                                let keysym = handle.modified_sym();
+                                let pressed = matches!(key.state(), BackendKeyState::Pressed);
+
+                                if pressed && modifiers.logo && keysym == keysyms::KEY_Return {
+                                    if let Err(error) = spawn_client(
+                                        "foot",
+                                        &socket_name,
+                                        &["-T", "CubixWM Terminal"],
+                                    ) {
+                                        eprintln!("failed to spawn foot: {error}");
+                                    }
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if pressed && modifiers.logo && keysym == keysyms::KEY_q {
+                                    if let Some(surface) =
+                                        state.xdg_shell_state.toplevel_surfaces().iter().next()
+                                    {
+                                        surface.send_close();
+                                    }
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if pressed && modifiers.logo && keysym == keysyms::KEY_Escape {
+                                    running = false;
+                                    return FilterResult::Intercept(());
+                                }
+
+                                FilterResult::Forward
+                            },
+                        );
+                    }
                     input::Event::Pointer(pointer_event) => match pointer_event {
                         input::event::PointerEvent::Motion(motion) => {
                             cursor_x += motion.delta_x();
@@ -610,6 +659,8 @@ impl TtyBackend {
             std::mem::swap(&mut front_buffer, &mut back_buffer);
             thread::sleep(Duration::from_millis(16));
         }
+
+        Ok(())
     }
 }
 
