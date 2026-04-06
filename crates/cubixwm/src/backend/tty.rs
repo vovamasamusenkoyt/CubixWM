@@ -57,7 +57,7 @@ use std::{
     fs::File,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -528,16 +528,27 @@ impl Drop for RestoreCrtc<'_> {
 
 fn spawn_demo_client(socket_name: &str) -> Result<()> {
     let script = "while true; do clear; date; sleep 1; done";
-    if try_spawn_client(
+    if let Some(mut child) = spawn_client(
         "foot",
         socket_name,
         &["-T", "CubixWM Clock", "-e", "sh", "-lc", script],
     )? {
-        eprintln!("demo client: foot");
-        return Ok(());
+        thread::sleep(Duration::from_millis(750));
+        match child.try_wait() {
+            Ok(None) => {
+                eprintln!("demo client: foot");
+                return Ok(());
+            }
+            Ok(Some(status)) => {
+                eprintln!("foot exited early with status {status}; falling back");
+            }
+            Err(error) => {
+                eprintln!("failed to poll foot child: {error}; falling back");
+            }
+        }
     }
 
-    if try_spawn_client("weston-simple-shm", socket_name, &[])? {
+    if spawn_client("weston-simple-shm", socket_name, &[])?.is_some() {
         eprintln!("demo client: weston-simple-shm");
         return Ok(());
     }
@@ -547,7 +558,7 @@ fn spawn_demo_client(socket_name: &str) -> Result<()> {
     ))
 }
 
-fn try_spawn_client(binary: &str, socket_name: &str, args: &[&str]) -> Result<bool> {
+fn spawn_client(binary: &str, socket_name: &str, args: &[&str]) -> Result<Option<Child>> {
     let log_path = std::env::temp_dir().join(format!("cubixwm-{}.log", binary));
     let stdout = File::create(&log_path)
         .map_err(|error| Error::new(format!("failed to create {}: {error}", log_path.display())))?;
@@ -568,8 +579,8 @@ fn try_spawn_client(binary: &str, socket_name: &str, args: &[&str]) -> Result<bo
         .args(args);
 
     match command.spawn() {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Ok(child) => Ok(Some(child)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(Error::new(format!(
             "failed to spawn {binary} (see {}): {error}",
             log_path.display()
