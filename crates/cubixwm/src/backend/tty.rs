@@ -357,7 +357,9 @@ impl TtyBackend {
                 "software"
             }
         );
-        eprintln!("shortcuts: Super+Enter launch foot, Super+Q close window, Super+Esc exit");
+        eprintln!(
+            "shortcuts: Super+Enter foot, Super+B browser, Super+Q close, Super+Esc exit"
+        );
 
         let mut running = true;
         while running {
@@ -405,12 +407,17 @@ impl TtyBackend {
                                     && modifiers.logo
                                     && keysym == keysyms::KEY_Return.into()
                                 {
-                                    if let Err(error) = spawn_client(
-                                        "foot",
-                                        &socket_name,
-                                        &["-T", "CubixWM Terminal"],
-                                    ) {
+                                    if let Err(error) =
+                                        spawn_client("foot", &socket_name, &["-T", "CubixWM Terminal"])
+                                    {
                                         eprintln!("failed to spawn foot: {error}");
+                                    }
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if pressed && modifiers.logo && keysym == keysyms::KEY_b.into() {
+                                    if let Err(error) = spawn_browser(&socket_name) {
+                                        eprintln!("failed to spawn browser: {error}");
                                     }
                                     return FilterResult::Intercept(());
                                 }
@@ -847,6 +854,25 @@ fn spawn_demo_client(socket_name: &str) -> Result<()> {
 
     Err(Error::new(
         "failed to spawn demo client: neither weston-simple-shm nor foot is available",
+    ))
+}
+
+fn spawn_browser(socket_name: &str) -> Result<()> {
+    for binary in [
+        "google-chrome-stable",
+        "google-chrome",
+        "chromium",
+        "chromium-browser",
+        "firefox",
+    ] {
+        if spawn_client(binary, socket_name, &[])?.is_some() {
+            eprintln!("launched browser: {binary}");
+            return Ok(());
+        }
+    }
+
+    Err(Error::new(
+        "no supported browser found (tried google-chrome-stable, google-chrome, chromium, chromium-browser, firefox)",
     ))
 }
 
