@@ -6,7 +6,10 @@ use drm::{
 };
 use smithay::{
     backend::{
-        input::{AbsolutePositionEvent, PointerMotionEvent},
+        input::{
+            AbsolutePositionEvent, ButtonState as BackendButtonState, Event as BackendEvent,
+            PointerButtonEvent, PointerMotionEvent,
+        },
         libinput::LibinputSessionInterface,
         renderer::{
             Bind, Color32F, Frame, Renderer,
@@ -22,7 +25,10 @@ use smithay::{
     },
     delegate_compositor, delegate_data_device, delegate_seat, delegate_shm, delegate_xdg_shell,
     delegate_output,
-    input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
+    input::{
+        Seat, SeatHandler, SeatState,
+        pointer::{ButtonEvent, CursorImageStatus, MotionEvent},
+    },
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         input::{self, Libinput},
@@ -36,7 +42,7 @@ use smithay::{
             },
         },
     },
-    utils::{Rectangle, Serial, Size, Transform},
+    utils::{Logical, Point, Rectangle, Serial, Size, Transform, SERIAL_COUNTER},
     wayland::{
         buffer::BufferHandler,
         compositor::{
@@ -255,9 +261,10 @@ impl TtyBackend {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<TtyCompositor>(&dh);
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "cubixwm-tty");
-        let _keyboard = seat
+        let keyboard = seat
             .add_keyboard(Default::default(), 200, 200)
             .map_err(|error| Error::new(format!("failed to initialize keyboard seat: {error}")))?;
+        let pointer = seat.add_pointer();
 
         let mut state = TtyCompositor {
             compositor_state,
@@ -369,6 +376,40 @@ impl TtyBackend {
                             cursor_x = motion.x_transformed(output.mode.size().0 as i32);
                             cursor_y = motion.y_transformed(output.mode.size().1 as i32);
                         }
+                        input::event::PointerEvent::Button(button) => {
+                            let serial = SERIAL_COUNTER.next_serial();
+                            let time = button.time_msec();
+                            let focus = pointer_focus(&state, cursor_x, cursor_y);
+
+                            if button.button_code() == 0x110
+                                && button.state() == BackendButtonState::Pressed
+                            {
+                                keyboard.set_focus(
+                                    &mut state,
+                                    focus.as_ref().map(|(surface, _)| surface.clone()),
+                                    serial,
+                                );
+                            }
+
+                            pointer.motion(
+                                &mut state,
+                                focus.clone(),
+                                &MotionEvent {
+                                    location: (cursor_x, cursor_y).into(),
+                                    serial,
+                                    time,
+                                },
+                            );
+                            pointer.button(
+                                &mut state,
+                                &ButtonEvent {
+                                    serial,
+                                    time,
+                                    button: button.button_code(),
+                                    state: button.state(),
+                                },
+                            );
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -377,6 +418,16 @@ impl TtyBackend {
 
             cursor_x = cursor_x.clamp(0.0, (output.mode.size().0.saturating_sub(1)) as f64);
             cursor_y = cursor_y.clamp(0.0, (output.mode.size().1.saturating_sub(1)) as f64);
+
+            pointer.motion(
+                &mut state,
+                pointer_focus(&state, cursor_x, cursor_y),
+                &MotionEvent {
+                    location: (cursor_x, cursor_y).into(),
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: start_time.elapsed().as_millis() as u32,
+                },
+            );
 
             if hardware_cursor.is_some() {
                 #[allow(deprecated)]
@@ -696,6 +747,30 @@ fn send_frames_surface_tree(surface: &wl_surface::WlSurface, time: u32) {
         },
         |_, _, &()| true,
     );
+}
+
+fn pointer_focus(
+    state: &TtyCompositor,
+    cursor_x: f64,
+    cursor_y: f64,
+) -> Option<(WlSurface, Point<f64, Logical>)> {
+    const WINDOW_X: f64 = 48.0;
+    const WINDOW_Y: f64 = 48.0;
+    const WINDOW_W: f64 = 960.0;
+    const WINDOW_H: f64 = 640.0;
+
+    if !(WINDOW_X..WINDOW_X + WINDOW_W).contains(&cursor_x)
+        || !(WINDOW_Y..WINDOW_Y + WINDOW_H).contains(&cursor_y)
+    {
+        return None;
+    }
+
+    state
+        .xdg_shell_state
+        .toplevel_surfaces()
+        .iter()
+        .next()
+        .map(|surface| (surface.wl_surface().clone(), (WINDOW_X, WINDOW_Y).into()))
 }
 
 fn nix_uid() -> u32 {
